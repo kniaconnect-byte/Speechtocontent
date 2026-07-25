@@ -473,13 +473,26 @@ const firebaseConfig = {
   messagingSenderId: "489435282652",
   appId: "1:489435282652:web:a744019bff686dbd09c819"
 };
-const FIREBASE_ENABLED = !!(firebaseConfig.apiKey && firebaseConfig.apiKey.indexOf('YOUR_') !== 0);
+const urlParams = new URLSearchParams(window.location.search);
+const FORCE_FIREBASE_AUTH = urlParams.get('firebase') === '1';
+const FIREBASE_ENABLED = FORCE_FIREBASE_AUTH || (
+  window.location.protocol !== 'file:' &&
+  firebaseConfig.apiKey &&
+  firebaseConfig.apiKey.indexOf('YOUR_') !== 0
+);
 let fbAuth = null, fbDb = null, googleProvider = null;
 if (FIREBASE_ENABLED) {
-  firebase.initializeApp(firebaseConfig);
-  fbAuth = firebase.auth();
-  fbDb = firebase.firestore();
-  googleProvider = new firebase.auth.GoogleAuthProvider();
+  try {
+    firebase.initializeApp(firebaseConfig);
+    fbAuth = firebase.auth();
+    fbDb = firebase.firestore();
+    googleProvider = new firebase.auth.GoogleAuthProvider();
+  } catch (e) {
+    console.warn('Firebase unavailable, falling back to local mode.', e);
+    fbAuth = null;
+    fbDb = null;
+    googleProvider = null;
+  }
 }
 
 /* ============ STATE ============ */
@@ -512,6 +525,35 @@ function escapeHtml(s){
   return (s||'').replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
 
+async function readStoredIdeas(){
+  try {
+    if (window.storage && typeof window.storage.get === 'function') {
+      const res = await window.storage.get('kniaconnect-ideas', false);
+      return res && res.value ? JSON.parse(res.value) : [];
+    }
+  } catch (e) {}
+  try {
+    const raw = localStorage.getItem('kniaconnect-ideas');
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+async function writeStoredIdeas(data){
+  try {
+    if (window.storage && typeof window.storage.set === 'function') {
+      await window.storage.set('kniaconnect-ideas', JSON.stringify(data), false);
+      return;
+    }
+  } catch (e) {}
+  try {
+    localStorage.setItem('kniaconnect-ideas', JSON.stringify(data));
+  } catch (e) {
+    throw e;
+  }
+}
+
 /* ============ STORAGE (Firestore kalau login aktif, kalau nggak pakai storage lokal) ============ */
 async function loadIdeas(){
   if (FIREBASE_ENABLED && userDocRef) {
@@ -521,10 +563,7 @@ async function loadIdeas(){
     } catch(e){ ideas = []; showToast('Gagal ambil data dari cloud'); }
     return;
   }
-  try{
-    const res = await window.storage.get('kniaconnect-ideas', false);
-    ideas = res && res.value ? JSON.parse(res.value) : [];
-  }catch(e){ ideas = []; }
+  ideas = await readStoredIdeas();
 }
 async function persistIdeas(){
   if (FIREBASE_ENABLED && userDocRef) {
@@ -533,7 +572,7 @@ async function persistIdeas(){
     return;
   }
   try{
-    await window.storage.set('kniaconnect-ideas', JSON.stringify(ideas), false);
+    await writeStoredIdeas(ideas);
   }catch(e){
     showToast('Gagal nyimpen, coba lagi ya');
   }
@@ -550,7 +589,7 @@ function showToast(msg){
 
 /* ============ AUTH FLOW ============ */
 function initApp(){
-  if (!FIREBASE_ENABLED) { boot(); return; }
+  if (!FIREBASE_ENABLED || !fbAuth) { boot(); return; }
   fbAuth.onAuthStateChanged(async (user)=>{
     currentUser = user;
     if (user) {
@@ -822,6 +861,7 @@ function renderEditorSheet(){
       </div>
 
       <div class="field-label">Hook</div>
+      <div style="font-size:12.5px;color:var(--ink-soft);margin:-4px 0 8px;line-height:1.5;">Setelah pilih hook, edit kalimatnya dengan bahasa kamu ya.</div>
       <div class="card" style="padding:12px;">
         <textarea id="editHookText" rows="3" placeholder="Tulis hook sendiri, atau pilih di bawah — nanti otomatis dirangkai jadi 1 hook utuh bareng ide di atas">${escapeHtml(idea.hook||'')}</textarea>
         <div style="display:flex;gap:8px;margin-top:10px;">
