@@ -370,9 +370,6 @@
     font-size:13px;font-weight:700;color:var(--ink-soft);
     margin:20px 0 10px;text-transform:uppercase;letter-spacing:.04em;
   }
-  .shuffle-box{
-    background:var(--bg-deep);border-radius:1.5rem;padding:16px;margin-top:14px;
-  }
   .close-x{
     position:absolute;top:16px;right:20px;
     background:rgba(30,27,24,.08);
@@ -457,6 +454,7 @@ const ICONS = {
   copy: `<svg viewBox="0 0 24 24" fill="none"><rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" stroke-width="2"/><path d="M5.5 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v.5" stroke="currentColor" stroke-width="2"/></svg>`,
   logout: `<svg viewBox="0 0 24 24" fill="none"><path d="M9 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M14 8l4 4-4 4M18 12H9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   book2: `<svg viewBox="0 0 24 24" fill="none"><path d="M4 6a2 2 0 0 1 2-2h5.5a2.5 2.5 0 0 1 2.5 2.5V20a2 2 0 0 0-2-2H6a2 2 0 0 1-2-2V6Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M14 6.5A2.5 2.5 0 0 1 16.5 4H20v12a2 2 0 0 0-2 2h-4V6.5Z" fill="currentColor" opacity=".15"/></svg>`,
+  sparkle: `<svg viewBox="0 0 24 24" fill="none"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3Z" fill="currentColor"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15Z" fill="currentColor"/></svg>`,
   google: `<svg viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.9 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3.1l6-6C34.6 5.1 29.6 3 24 3 12.4 3 3 12.4 3 24s9.4 21 21 21 21-9.4 21-21c0-1.2-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.5 16 18.9 13 24 13c3.1 0 5.9 1.2 8 3.1l6-6C34.6 6.1 29.6 4 24 4 16.1 4 9.3 8.4 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 10-2 13.5-5.2l-6.2-5.2C29.3 35.6 26.8 36.5 24 36.5c-5.2 0-9.6-3.3-11.2-7.9l-6.5 5C9.3 39.6 16.1 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.3 4.3-4.2 5.6l6.2 5.2C40.9 36 44 30.5 44 24c0-1.2-.1-2.4-.4-3.5z"/></svg>`
 };
 function ico(name, cls=''){ return `<span class="icon ${cls}">${ICONS[name]||''}</span>`; }
@@ -502,6 +500,22 @@ let editingId = null;
 let draftIdea = null;
 let pickerTarget = null;
 let libAccordionOpen = {};
+let recommendedCatIndex = null;
+
+/* "AI-style" suggestion — cocokin teks ide sama keyword tiap kategori hook.
+   Statis & lokal (nggak ada API), tapi hasilnya kerasa nyambung sama ide user. */
+function suggestHookCategory(text){
+  const t = (text||'').toLowerCase();
+  if(!t.trim()) return null;
+  let bestIdx = null, bestScore = 0;
+  HOOKS_60.forEach((cat, i)=>{
+    const kws = cat.keywords || [];
+    let score = 0;
+    kws.forEach(k=>{ if(t.includes(k)) score++; });
+    if(score > bestScore){ bestScore = score; bestIdx = i; }
+  });
+  return bestScore > 0 ? bestIdx : null;
+}
 let recognizing = false;
 let recognition = null;
 let currentUser = null;
@@ -697,12 +711,6 @@ function renderCapture(){
       <button class="btn-primary" style="margin-top:14px;" id="saveIdeaBtn">Simpan ke Inbox</button>
     </div>
 
-    <div class="shuffle-box">
-      <div style="display:flex;align-items:center;gap:8px;font-weight:700;font-size:14px;margin-bottom:4px;">${ico('shuffle')} Lagi buntu? Acak kombinasi ide</div>
-      <div id="shuffleResult" style="font-size:13.5px;color:var(--ink-soft);margin:6px 0 10px;">Tekan tombol di bawah buat dapet kombinasi topik + angle + format secara acak.</div>
-      <button class="btn-ghost" style="width:100%;" id="shuffleBtn">${ico('shuffle')} Acak Kombinasi</button>
-    </div>
-
     ${inboxCount>0 ? `<div style="text-align:center;margin-top:16px;font-size:13px;color:var(--ink-soft);">${inboxCount} ide nunggu di Inbox →</div>` : ''}
   </div>`;
 }
@@ -824,6 +832,7 @@ function closeEditor(){
   editingId = null;
   draftIdea = null;
   pickerTarget = null;
+  recommendedCatIndex = null;
   render();
 }
 function syncEditorFieldsIntoDraft(){
@@ -870,15 +879,6 @@ function renderEditorSheet(){
         </div>
       </div>
 
-      <div class="field-label">Cek Skor Ide (opsional)</div>
-      <div class="card" style="padding:12px 16px;">
-        ${CHECKLIST.map(c=>`
-          <label class="checklist-row">
-            <input type="checkbox" data-check="${c.key}" ${idea.checklist && idea.checklist[c.key] ? 'checked':''}>
-            <span>${c.label}</span>
-          </label>`).join('')}
-      </div>
-
       <div class="field-label">Jadwalkan (opsional)</div>
       <div class="card" style="padding:12px;">
         <input type="date" id="editDate" value="${idea.scheduledDate||''}">
@@ -918,9 +918,13 @@ function renderHookPickerSheet(){
         <div class="close-x" id="closePicker">${ico('close')}</div>
         <h2 style="font-size:18px;margin:0 0 14px;">Pilih Hook</h2>
       </div>
+      ${recommendedCatIndex!==null ? `
+        <div style="display:flex;align-items:center;gap:6px;background:var(--accent-soft);color:var(--accent-dark);font-size:12.5px;font-weight:700;padding:9px 14px;border-radius:9999px;margin-bottom:14px;">
+          ${ico('sparkle')} Direkomendasikan buat idemu: ${HOOKS_60[recommendedCatIndex].name}
+        </div>` : ''}
       ${HOOKS_60.map((cat,ci)=>`
         <div class="accordion-head ${libAccordionOpen['p'+ci]?'open':''}" data-acc-picker="${ci}">
-          <span><span class="cat-dot" style="background:${CAT_COLORS[ci%CAT_COLORS.length]}"></span>${cat.name}</span>
+          <span><span class="cat-dot" style="background:${CAT_COLORS[ci%CAT_COLORS.length]}"></span>${cat.name}${ci===recommendedCatIndex?` ${ico('sparkle')}`:''}</span>
           ${ico('chevron')}
         </div>
         ${libAccordionOpen['p'+ci] ? cat.items.map(h=>`
@@ -953,14 +957,6 @@ function attachEvents(){
   };
   const micBtn = document.getElementById('micBtn');
   if(micBtn) micBtn.onclick = ()=>toggleMic();
-  const shuffleBtn = document.getElementById('shuffleBtn');
-  if(shuffleBtn) shuffleBtn.onclick = ()=>{
-    const t = AXIS_TOPIC[Math.floor(Math.random()*AXIS_TOPIC.length)];
-    const a = AXIS_ANGLE[Math.floor(Math.random()*AXIS_ANGLE.length)];
-    const f = AXIS_FORMAT[Math.floor(Math.random()*AXIS_FORMAT.length)];
-    document.getElementById('shuffleResult').innerHTML = `<b>${t}</b> + <b>${a}</b> + <b>${f}</b>`;
-  };
-
   const addIdeaBtn = document.getElementById('addIdeaBtn');
   if(addIdeaBtn) addIdeaBtn.onclick = ()=>openEditor('new', addIdeaBtn.dataset.presetDate || null);
 
@@ -989,7 +985,13 @@ function attachEvents(){
   if(pickHookBtn) pickHookBtn.onclick = ()=>{
     syncEditorFieldsIntoDraft();
     if(!draftIdea.text.trim()){ showToast('Tulis idenya dulu ya, biar hook-nya bisa dirangkai'); return; }
-    pickerTarget='hooks'; render();
+    showToast('Menganalisis idemu... '+ico('sparkle'));
+    setTimeout(()=>{
+      recommendedCatIndex = suggestHookCategory(draftIdea.text);
+      libAccordionOpen = {};
+      if(recommendedCatIndex!==null) libAccordionOpen['p'+recommendedCatIndex] = true;
+      pickerTarget='hooks'; render();
+    }, 450);
   };
   const pickTemplateBtn = document.getElementById('pickTemplateBtn');
   if(pickTemplateBtn) pickTemplateBtn.onclick = ()=>{
@@ -997,13 +999,6 @@ function attachEvents(){
     if(!draftIdea.text.trim()){ showToast('Tulis idenya dulu ya, biar hook-nya bisa dirangkai'); return; }
     pickerTarget='templates'; render();
   };
-
-  document.querySelectorAll('[data-check]').forEach(el=>{
-    el.onchange = ()=>{
-      draftIdea.checklist = draftIdea.checklist||{};
-      draftIdea.checklist[el.dataset.check] = el.checked;
-    };
-  });
 
   const saveEditBtn = document.getElementById('saveEditBtn');
   if(saveEditBtn) saveEditBtn.onclick = async ()=>{
