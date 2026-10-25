@@ -1,4 +1,4 @@
-const CACHE_NAME = 'knia-planner-v3';
+const CACHE_NAME = 'knia-planner-v4';
 const APP_SHELL = [
   './',
   './index.html',
