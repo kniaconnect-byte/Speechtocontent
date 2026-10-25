@@ -1033,6 +1033,7 @@ function renderLoginGate(){
 function render(){
   const app = document.getElementById('app');
   let body = '';
+  if(tab==='capture') ensureCaptureDraft();
   if(tab==='capture') body = renderCapture();
   else if(tab==='inbox') body = renderInbox();
   else if(tab==='planner') body = renderPlanner();
@@ -1049,6 +1050,9 @@ function render(){
 
   if(editingId!==null){
     document.body.insertAdjacentHTML('beforeend', renderEditorSheet());
+  } else if(tab==='capture' && draftIdea && pickerTarget){
+    // alur di halaman depan: daftar 60 hook / template tetap muncul sebagai popup
+    document.body.insertAdjacentHTML('beforeend', renderHookPickerSheet());
   }
   // Sheet pengaturan selalu di-append terakhir supaya tampil paling atas
   if(settingsOpen){
@@ -1108,18 +1112,24 @@ function renderCapture(){
   ${renderTopbar('Voice Content Planner', 'Ada ide mendadak?')}
   <div class="screen">
     ${renderInstallButton()}
+    ${editorStep===1 ? `
     <div class="record-zone">
-      <button class="mic-btn-big" id="micBtn">${ico('mic','icon-xl')}</button>
-      <div class="record-label" id="recordLabel">Tekan buat mulai rekam ide kamu</div>
-    </div>
+      <button class="mic-btn-big ${recognizing?'recording':''}" id="micBtn">${ico('mic','icon-xl')}</button>
+      <div class="record-label" id="recordLabel">${recognizing ? 'Lagi mendengarkan... tekan lagi buat stop' : 'Rekam ide kamu, atau ketik langsung di bawah'}</div>
+    </div>` : ''}
 
-    <div class="card">
-      <textarea id="captureText" rows="4" placeholder="Ide otomatis muncul di sini pas rekam. Bisa juga ketik manual..."></textarea>
-      <button class="btn-primary" style="margin-top:14px;" id="saveIdeaBtn">Simpan ke Inbox</button>
-    </div>
+    <div style="${editorStep===1 ? '' : 'margin-top:14px;'}">${draftIdea ? renderWizard() : ''}</div>
 
-    ${inboxCount>0 ? `<div style="text-align:center;margin-top:16px;font-size:13px;color:var(--ink-soft);">${inboxCount} ide nunggu di Inbox →</div>` : ''}
+    ${inboxCount>0 ? `<div style="text-align:center;margin-top:16px;font-size:13px;color:var(--ink-soft);">${inboxCount} ide nunggu di Inbox</div>` : ''}
   </div>`;
+}
+
+/* Halaman depan = awal alur: draft baru otomatis disiapkan (dipertahankan kalau pindah tab) */
+function ensureCaptureDraft(){
+  if(editingId!==null || draftIdea) return;
+  draftIdea = {id:'new', text:'', format:'', reference:'', hook:'', caption:'', scheduledDate:null, checklist:{}, createdAt:new Date().toISOString()};
+  editorStep = 1;
+  resetAiStates();
 }
 
 /* ============ INBOX SCREEN ============ */
@@ -1237,7 +1247,14 @@ function resetAiStates(){
   capState = {status:'idle', error:'', code:''};
 }
 
+/* Draft di halaman depan disimpan sementara selagi editor popup (Inbox/Planner) dibuka */
+let captureStash = null;
+
 function openEditor(id, presetDate){
+  syncEditorFieldsIntoDraft();
+  if(editingId===null && draftIdea && !captureStash){
+    captureStash = {draftIdea, editorStep, aiState, capState};
+  }
   editingId = id;
   if(id==='new'){
     draftIdea = {id:'new', text:'', format:'', reference:'', hook:'', caption:'', scheduledDate:presetDate||null, checklist:{}, createdAt:new Date().toISOString()};
@@ -1260,6 +1277,14 @@ function closeEditor(){
   draftIdea = null;
   pickerTarget = null;
   recommendedCatIndex = null;
+  if(captureStash){
+    // balikin draft halaman depan yang tadi lagi dikerjain
+    draftIdea = captureStash.draftIdea;
+    editorStep = captureStash.editorStep;
+    aiState = captureStash.aiState.status==='loading' ? {status:'idle', hooks:[], error:'', code:''} : captureStash.aiState;
+    capState = captureStash.capState.status==='loading' ? {status:'idle', error:'', code:''} : captureStash.capState;
+    captureStash = null;
+  }
   render();
 }
 function syncEditorFieldsIntoDraft(){
@@ -1276,8 +1301,11 @@ function syncEditorFieldsIntoDraft(){
   if(d) draftIdea.scheduledDate = d.value || null;
 }
 
+function stopMic(){ try{ if(recognizing && recognition) recognition.stop(); }catch(e){} }
+
 function goStep(n){
   syncEditorFieldsIntoDraft();
+  stopMic();
   editorStep = n;
   render();
 }
@@ -1289,15 +1317,30 @@ function nextStep(){
   } else if(editorStep===2){
     if(!(draftIdea.hook||'').trim()){ showToast('Pilih atau tulis hook dulu ya'); return; }
   }
+  stopMic();
   editorStep = Math.min(3, editorStep+1);
   render();
 }
 
 function renderEditorSheet(){
-  const idea = draftIdea;
-  if(!idea) return '';
+  if(!draftIdea) return '';
   if(pickerTarget) return renderHookPickerSheet();
+  return `
+  <div class="modal-overlay" id="editorOverlay">
+    <div class="sheet">
+      <div class="sheet-handle"></div>
+      <div style="position:relative;">
+        <div class="close-x" id="closeEditor">${ico('close')}</div>
+        <h2 style="font-size:19px;margin:0 0 14px;">Atur Ide</h2>
+      </div>
+      ${renderWizard()}
+    </div>
+  </div>`;
+}
 
+/* Isi alur 3 langkah (tab langkah + isi + tombol) — dipakai di halaman depan dan di editor popup */
+function renderWizard(){
+  const idea = draftIdea;
   const step = editorStep;
   const tabs = EDITOR_STEPS.map(s=>`
     <button type="button" class="step-tab ${step===s.n?'active':(s.n<step?'done':'')}" data-step="${s.n}">
@@ -1320,19 +1363,7 @@ function renderEditorSheet(){
     ${!isLast ? `<div style="text-align:center;margin-top:12px;"><button type="button" class="link-btn" id="saveEditBtn">Simpan dulu, lanjutin nanti</button></div>` : ''}
     ${idea.id!=='new' ? `<div style="text-align:center;margin-top:12px;"><button type="button" class="link-btn" style="color:#B23B2A;" id="deleteIdeaBtn">Hapus ide ini</button></div>` : ''}`;
 
-  return `
-  <div class="modal-overlay" id="editorOverlay">
-    <div class="sheet">
-      <div class="sheet-handle"></div>
-      <div style="position:relative;">
-        <div class="close-x" id="closeEditor">${ico('close')}</div>
-        <h2 style="font-size:19px;margin:0 0 14px;">Atur Ide</h2>
-      </div>
-      <div class="steps">${tabs}</div>
-      ${body}
-      ${footer}
-    </div>
-  </div>`;
+  return `<div class="steps">${tabs}</div>${body}${footer}`;
 }
 
 /* Langkah 1 — tulis hook/ide, pilih jenis konten, referensi (opsional) */
@@ -1571,21 +1602,12 @@ function renderHookPickerSheet(){
 function attachEvents(){
   bindInstallButtons();
   document.querySelectorAll('[data-tab]').forEach(el=>{
-    el.onclick = ()=>{ tab = el.dataset.tab; render(); };
+    el.onclick = ()=>{ syncEditorFieldsIntoDraft(); stopMic(); tab = el.dataset.tab; render(); };
   });
 
   const logoutBtn = document.getElementById('logoutBtn');
   if(logoutBtn) logoutBtn.onclick = ()=>{ fbAuth.signOut(); };
 
-  const saveBtn = document.getElementById('saveIdeaBtn');
-  if(saveBtn) saveBtn.onclick = async ()=>{
-    const txt = document.getElementById('captureText').value.trim();
-    if(!txt){ showToast('Tulis dulu ide-nya ya'); return; }
-    ideas.push({id:uid(), text:txt, format:'', hook:'', scheduledDate:null, checklist:{}, createdAt:new Date().toISOString()});
-    await persistIdeas();
-    showToast('Ide tersimpan ke Inbox '+ico('check'));
-    render();
-  };
   const micBtn = document.getElementById('micBtn');
   if(micBtn) micBtn.onclick = ()=>toggleMic();
   const addIdeaBtn = document.getElementById('addIdeaBtn');
@@ -1649,7 +1671,7 @@ function attachEvents(){
       ideas[i] = draftIdea;
     }
     await persistIdeas();
-    showToast(wasScheduled ? 'Ide dijadwalkan '+ico('check') : 'Tersimpan '+ico('check'));
+    showToast(wasScheduled ? 'Ide dijadwalkan '+ico('check') : 'Tersimpan ke Inbox '+ico('check'));
     closeEditor();
   };
 
@@ -1766,29 +1788,35 @@ function toggleMic(){
     showToast('Rekam suara nggak didukung di browser ini — tulis manual aja ya');
     return;
   }
-  const micBtn = document.getElementById('micBtn');
-  const label = document.getElementById('recordLabel');
+  // Tombol & label dicari ulang tiap kali, karena layar bisa ke-render ulang selagi merekam
+  const setMicUi = (on)=>{
+    const b = document.getElementById('micBtn');
+    const l = document.getElementById('recordLabel');
+    if(b) b.classList.toggle('recording', on);
+    if(l) l.textContent = on ? 'Lagi mendengarkan... tekan lagi buat stop' : 'Rekam ide kamu, atau ketik langsung di bawah';
+  };
   if(recognizing){ recognition && recognition.stop(); return; }
   try{
     recognition = new SR();
     recognition.lang = 'id-ID';
     recognition.continuous = true;
     recognition.interimResults = false;
-    recognition.onstart = ()=>{ recognizing=true; micBtn.classList.add('recording'); if(label) label.textContent='Lagi mendengarkan... tekan lagi buat stop'; };
+    recognition.onstart = ()=>{ recognizing=true; setMicUi(true); };
     recognition.onerror = ()=>{
-      recognizing=false; micBtn.classList.remove('recording');
-      if(label) label.textContent='Tekan buat mulai rekam ide kamu';
+      recognizing=false; setMicUi(false);
       showToast('Rekaman gagal / izin mic ditolak — tulis manual aja ya');
     };
-    recognition.onend = ()=>{ recognizing=false; micBtn.classList.remove('recording'); if(label) label.textContent='Tekan buat mulai rekam ide kamu'; };
+    recognition.onend = ()=>{ recognizing=false; setMicUi(false); };
     recognition.onresult = (e)=>{
       let finalText = '';
       for(let i=e.resultIndex;i<e.results.length;i++){
         if(e.results[i].isFinal) finalText += e.results[i][0].transcript + ' ';
       }
-      if(finalText){
-        const ta = document.getElementById('captureText');
-        ta.value = (ta.value ? ta.value+' ' : '') + finalText.trim();
+      if(finalText && draftIdea){
+        syncEditorFieldsIntoDraft();
+        draftIdea.text = (draftIdea.text ? draftIdea.text+' ' : '') + finalText.trim();
+        const ta = document.getElementById('editIdeaText');
+        if(ta) ta.value = draftIdea.text;
       }
     };
     recognition.start();
