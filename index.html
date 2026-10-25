@@ -299,6 +299,7 @@
     padding:20px 20px 28px;
     animation:slideUp .22s ease-out;
   }
+  .modal-overlay.noanim .sheet{animation:none;}
   @keyframes slideUp{from{transform:translateY(24px);opacity:0;}to{transform:translateY(0);opacity:1;}}
   .sheet-handle{
     width:40px;height:4px;background:var(--outline-variant);
@@ -474,6 +475,30 @@
     background:#fdecea;color:#7a2b22;border-radius:1.25rem;
     padding:14px 16px;font-size:13.5px;line-height:1.5;margin-bottom:12px;
   }
+
+  /* Langkah editor (Ide → Hook → Caption) */
+  .steps{display:flex;gap:6px;margin:18px 0 6px;}
+  .step-tab{
+    flex:1;border:none;cursor:pointer;
+    background:var(--bg-deep);color:var(--ink-soft);
+    border-radius:9999px;padding:9px 6px;
+    font-family:'Plus Jakarta Sans',sans-serif;font-size:12.5px;font-weight:700;
+    display:flex;align-items:center;justify-content:center;gap:6px;
+  }
+  .step-tab.done{background:var(--accent-soft);color:var(--accent-dark);}
+  .step-tab.active{background:var(--accent);color:#fff;box-shadow:0 8px 18px -10px rgba(152,69,62,.6);}
+  .step-num{
+    width:18px;height:18px;border-radius:50%;
+    display:inline-flex;align-items:center;justify-content:center;
+    font-size:11px;font-weight:800;background:rgba(255,255,255,.22);
+  }
+  .step-tab.done .step-num{background:transparent;}
+  .step-num .icon{width:16px;height:16px;}
+  .choice-card{
+    background:var(--card);border-radius:1.5rem;padding:14px;margin-bottom:10px;
+    border:2px solid transparent;box-shadow:var(--shadow-tight);
+  }
+  .choice-card.selected{border-color:var(--accent);}
 </style>
 </head>
 <body>
@@ -647,9 +672,12 @@ const GEMINI_MODEL_SUGGESTIONS = ['gemini-3.5-flash-lite', 'gemini-3.8-flash'];
 const AI_HOOK_COUNT = 5;
 
 let settingsOpen = false;     // sheet Pengaturan AI
-let pendingGenerate = false;  // habis simpan key, langsung lanjut generate
+let pendingGenerate = '';     // '' | 'hook' | 'caption' — habis simpan key, langsung lanjut generate
 let aiState = {status:'idle', hooks:[], error:'', code:''};
 let aiReqId = 0;              // buat ngebatalin hasil request lama
+let capState = {status:'idle', error:'', code:''};  // status generate caption
+let capReqId = 0;
+let editorStep = 1;           // langkah di editor: 1 Ide, 2 Hook, 3 Caption
 
 function lsGet(k){ try{ return localStorage.getItem(k) || ''; }catch(e){ return ''; } }
 function lsSet(k, v){
@@ -660,7 +688,7 @@ function lsSet(k, v){
 }
 function getApiKey(){ return lsGet(LS_AI_KEY); }
 function getModel(){ return lsGet(LS_AI_MODEL) || DEFAULT_GEMINI_MODEL; }
-function getHookMode(){ return lsGet(LS_HOOK_MODE) === 'ai' ? 'ai' : 'template'; }
+function getHookMode(){ return lsGet(LS_HOOK_MODE) === 'template' ? 'template' : 'ai'; }
 
 function aiError(code, msg){ const e = new Error(msg); e.code = code; return e; }
 
@@ -680,11 +708,19 @@ function mapGeminiHttpError(status, data, model){
   return aiError('other', 'Gagal generate (kode ' + status + ').' + (raw ? ' ' + raw.slice(0, 140) : ''));
 }
 
-function buildHookPrompt(ideaText, format){
-  // Contoh gaya diambil dari library sendiri (data.js) biar nada hook-nya nyambung sama brand
-  const refs = HOOKS_60.map(c => '- ' + c.name + ': "' + c.items[0] + '" / "' + (c.items[1] || c.items[0]) + '"').join('\n');
-  const pats = VIRAL_TEMPLATES.map(t => '- ' + t.type + ': ' + t.tpl).join('\n');
-  const system = [
+const FORMAT_CAPTION_GUIDE = {
+  Reels: 'caption singkat 3-6 baris pendek, enak dibaca sambil nonton',
+  TikTok: 'caption pendek 2-4 baris dengan nada ringan',
+  YouTube: 'deskripsi video: 2 paragraf pendek, lalu ajakan subscribe dan komentar',
+  Carousel: 'caption yang merangkum isi carousel, ajak swipe sampai slide terakhir dan simpan postingan',
+  Story: '1-2 kalimat pendek yang ngajak orang bales atau ikut respon'
+};
+
+function hasReference(ref){ return !!(ref && String(ref).trim()); }
+
+function buildHookPrompt(ideaText, format, reference){
+  const hasRef = hasReference(reference);
+  const rules = [
     'Kamu copywriter konten video pendek berbahasa Indonesia.',
     'Tugasmu: menulis HOOK, yaitu kalimat pembuka di 1-3 detik pertama yang bikin orang berhenti scroll.',
     'Aturan:',
@@ -693,15 +729,56 @@ function buildHookPrompt(ideaText, format){
     '- Tanpa hashtag dan tanpa emoji.',
     '- Jangan mengarang angka, hasil, atau klaim yang nggak ada di ide.',
     '- Jangan menyalin contoh mentah-mentah; sesuaikan dengan isi ide.',
-    '- Buat ' + AI_HOOK_COUNT + ' hook dengan sudut pandang yang beda-beda.',
-    'Balas HANYA berupa JSON array berisi ' + AI_HOOK_COUNT + ' string, tanpa penjelasan lain.'
-  ].join('\n');
-  const user =
-    'Ide konten:\n"""\n' + String(ideaText).slice(0, 1500) + '\n"""\n' +
-    (format ? 'Format: ' + format + '\n' : '') +
-    '\nContoh nada hook (referensi gaya saja):\n' + refs +
-    '\n\nPola kalimat yang boleh dipakai sebagai kerangka:\n' + pats;
-  return {system, user};
+    '- Buat ' + AI_HOOK_COUNT + ' hook dengan sudut pandang yang beda-beda.'
+  ];
+  if(hasRef){
+    rules.push(
+      '- Pengguna memberi REFERENSI. Pelajari gaya, pola kalimat, panjang, nada, dan teknik pembukanya, lalu tulis hook BARU tentang ide pengguna dengan gaya yang sama.',
+      '- Jangan menyalin kata atau kalimat dari referensi, dan jangan membawa topik atau klaim referensi ke hook.'
+    );
+  }
+  rules.push('Balas HANYA berupa JSON array berisi ' + AI_HOOK_COUNT + ' string, tanpa penjelasan lain.');
+
+  let user = 'Ide konten:\n"""\n' + String(ideaText).slice(0, 1500) + '\n"""\n' +
+             (format ? 'Format konten: ' + format + '\n' : '');
+  if(hasRef){
+    // Referensi user jadi acuan utama, jadi contoh library nggak dipakai supaya gayanya nggak campur
+    user += '\nREFERENSI (tiru gaya dan polanya saja, bukan isinya):\n"""\n' + String(reference).slice(0, 1500) + '\n"""\n';
+  } else {
+    // Tanpa referensi: contoh gaya diambil dari library sendiri (data.js) biar nada hook-nya nyambung sama brand
+    const refs = HOOKS_60.map(c => '- ' + c.name + ': "' + c.items[0] + '" / "' + (c.items[1] || c.items[0]) + '"').join('\n');
+    const pats = VIRAL_TEMPLATES.map(t => '- ' + t.type + ': ' + t.tpl).join('\n');
+    user += '\nContoh nada hook (referensi gaya saja):\n' + refs +
+            '\n\nPola kalimat yang boleh dipakai sebagai kerangka:\n' + pats;
+  }
+  return {system: rules.join('\n'), user};
+}
+
+function buildCaptionPrompt(idea){
+  const hasRef = hasReference(idea.reference);
+  const guide = FORMAT_CAPTION_GUIDE[idea.format] || 'caption singkat yang enak dibaca';
+  const rules = [
+    'Kamu copywriter konten media sosial berbahasa Indonesia.',
+    'Tugasmu: menulis CAPTION untuk konten ' + (idea.format || 'media sosial') + ' berupa ' + guide + '.',
+    'Aturan:',
+    '- Bahasa Indonesia santai sehari-hari (aku/kamu), kayak ngobrol sama teman.',
+    '- Baris pertama caption adalah HOOK yang sudah dipilih pengguna, tulis persis seperti aslinya.',
+    '- Lanjutkan dengan isi yang berasal dari ide pengguna, paragraf pendek dan gampang di-scan.',
+    '- Tutup dengan ajakan (CTA) yang natural, misalnya simpan, bagikan, atau komentar.',
+    '- Tambahkan 3-5 hashtag relevan di baris paling akhir. Emoji boleh, maksimal 2.',
+    '- Jangan mengarang angka, hasil, atau klaim yang nggak ada di ide.'
+  ];
+  if(hasRef){
+    rules.push('- Pengguna memberi REFERENSI. Ikuti gaya penulisan, panjang, nada, struktur paragraf, dan pola ajakannya, tapi isinya tentang ide pengguna. Jangan menyalin kalimat dari referensi.');
+  }
+  rules.push('Balas HANYA berupa teks caption siap posting, tanpa penjelasan dan tanpa tanda kutip pembuka/penutup.');
+
+  let user = 'Ide konten:\n"""\n' + String(idea.text).slice(0, 1500) + '\n"""\n' +
+             '\nHook terpilih:\n"""\n' + String(idea.hook).slice(0, 500) + '\n"""\n';
+  if(hasRef){
+    user += '\nREFERENSI (tiru gaya dan polanya saja, bukan isinya):\n"""\n' + String(idea.reference).slice(0, 1500) + '\n"""\n';
+  }
+  return {system: rules.join('\n'), user};
 }
 
 function cleanHookList(arr){
@@ -733,12 +810,16 @@ function parseHookList(text){
   ));
 }
 
-async function generateHooksWithGemini(ideaText, format){
+async function callGemini(system, user, asJson){
   const key = getApiKey();
   const model = getModel();
-  const {system, user} = buildHookPrompt(ideaText, format);
   const url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
               encodeURIComponent(model) + ':generateContent';
+  const body = {
+    systemInstruction: {parts: [{text: system}]},
+    contents: [{role: 'user', parts: [{text: user}]}]
+  };
+  if(asJson) body.generationConfig = {responseMimeType: 'application/json'};
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 30000);
   let res;
@@ -746,11 +827,7 @@ async function generateHooksWithGemini(ideaText, format){
     res = await fetch(url, {
       method: 'POST',
       headers: {'Content-Type': 'application/json', 'x-goog-api-key': key},
-      body: JSON.stringify({
-        systemInstruction: {parts: [{text: system}]},
-        contents: [{role: 'user', parts: [{text: user}]}],
-        generationConfig: {responseMimeType: 'application/json'}
-      }),
+      body: JSON.stringify(body),
       signal: ctrl.signal
     });
   }catch(e){
@@ -764,24 +841,38 @@ async function generateHooksWithGemini(ideaText, format){
   if(!res.ok) throw mapGeminiHttpError(res.status, data, model);
 
   if(data && data.promptFeedback && data.promptFeedback.blockReason)
-    throw aiError('blocked', 'Idemu ditahan filter keamanan Gemini. Coba ubah kalimatnya sedikit.');
+    throw aiError('blocked', 'Teksmu ditahan filter keamanan Gemini. Coba ubah kalimatnya sedikit.');
   const cand = data && data.candidates && data.candidates[0];
   const parts = (cand && cand.content && cand.content.parts) || [];
-  const text = parts.filter(p => p && !p.thought && typeof p.text === 'string').map(p => p.text).join('');
+  return parts.filter(p => p && !p.thought && typeof p.text === 'string').map(p => p.text).join('');
+}
+
+async function generateHooksWithGemini(ideaText, format, reference){
+  const {system, user} = buildHookPrompt(ideaText, format, reference);
+  const text = await callGemini(system, user, true);
   const hooks = parseHookList(text);
   if(!hooks.length) throw aiError('empty', 'AI nggak ngasih hasil yang bisa dipakai. Coba generate ulang.');
   return hooks;
 }
 
-function openSettings(retryAfterSave){
+async function generateCaptionWithGemini(idea){
+  const {system, user} = buildCaptionPrompt(idea);
+  const text = await callGemini(system, user, false);
+  const caption = String(text || '').trim()
+    .replace(/^```(?:\w+)?\s*/i, '').replace(/\s*```$/, '').trim();
+  if(caption.length < 10) throw aiError('empty', 'AI nggak ngasih caption yang bisa dipakai. Coba generate ulang.');
+  return caption;
+}
+
+function openSettings(retryKind){
   syncEditorFieldsIntoDraft();
   settingsOpen = true;
-  pendingGenerate = !!retryAfterSave;
+  pendingGenerate = retryKind || ''; // '' | 'hook' | 'caption' — lanjut generate habis key disimpan
   render();
 }
 function closeSettings(){
   settingsOpen = false;
-  pendingGenerate = false;
+  pendingGenerate = '';
   render();
 }
 
@@ -791,20 +882,41 @@ async function startAiGenerate(){
     showToast('Tulis idenya dulu ya, biar hook-nya bisa dirangkai');
     return;
   }
-  if(!getApiKey()){ openSettings(true); return; }
+  if(!getApiKey()){ openSettings('hook'); return; }
   const myId = ++aiReqId;
   aiState = {status:'loading', hooks:[], error:'', code:''};
-  pickerTarget = 'ai';
   render();
   try{
-    const hooks = await generateHooksWithGemini(draftIdea.text, draftIdea.format);
+    const hooks = await generateHooksWithGemini(draftIdea.text, draftIdea.format, draftIdea.reference);
     if(myId !== aiReqId) return;
     aiState = {status:'done', hooks, error:'', code:''};
   }catch(e){
     if(myId !== aiReqId) return;
     aiState = {status:'error', hooks:[], error:e.message || 'Gagal generate.', code:e.code || 'other'};
   }
-  if(pickerTarget === 'ai' && draftIdea) render();
+  if(draftIdea){ syncEditorFieldsIntoDraft(); render(); }
+}
+
+async function startCaptionGenerate(){
+  syncEditorFieldsIntoDraft();
+  if(!draftIdea) return;
+  if(!draftIdea.text.trim()){ showToast('Tulis idenya dulu ya'); return; }
+  if(!(draftIdea.hook||'').trim()){ showToast('Pilih atau tulis hook dulu ya'); return; }
+  if(!getApiKey()){ openSettings('caption'); return; }
+  const myId = ++capReqId;
+  capState = {status:'loading', error:'', code:''};
+  render();
+  try{
+    const caption = await generateCaptionWithGemini(draftIdea);
+    if(myId !== capReqId) return;
+    capState = {status:'done', error:'', code:''};
+    if(draftIdea){ syncEditorFieldsIntoDraft(); draftIdea.caption = caption; }
+  }catch(e){
+    if(myId !== capReqId) return;
+    capState = {status:'error', error:e.message || 'Gagal generate.', code:e.code || 'other'};
+    if(draftIdea) syncEditorFieldsIntoDraft();
+  }
+  if(draftIdea) render();
 }
 
 /* ============ TOAST ============ */
@@ -863,6 +975,7 @@ function render(){
   // otherwise repeated renders while the editor is open stack duplicate
   // sheets, and getElementById grabs the old (hidden) one instead of the
   // visible top one, making buttons look dead.
+  const hadOverlay = !!document.querySelector('body > .modal-overlay');
   document.querySelectorAll('body > .modal-overlay').forEach(el=>el.remove());
 
   if(editingId!==null){
@@ -872,6 +985,8 @@ function render(){
   if(settingsOpen){
     document.body.insertAdjacentHTML('beforeend', renderSettingsSheet());
   }
+  // Animasi slide-up cuma pas sheet pertama kali muncul, bukan tiap pindah langkah / re-render
+  if(hadOverlay) document.querySelectorAll('body > .modal-overlay').forEach(el=>el.classList.add('noanim'));
   try{ attachEvents(); }catch(e){ console.error('attachEvents error:', e); }
 }
 
@@ -957,6 +1072,7 @@ function renderIdeaCard(idea){
     <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
       ${idea.format ? `<span class="tag">${idea.format}</span>` : `<span class="tag muted">Belum ada format</span>`}
       ${idea.hook ? `<span class="tag muted">${ico('check')} Hook siap</span>` : ''}
+      ${idea.caption ? `<span class="tag muted">${ico('check')} Caption siap</span>` : ''}
       ${idea.scheduledDate ? `<span class="tag muted">${ico('calendar')} ${fmtDate(idea.scheduledDate)}</span>` : ''}
     </div>
   </div>`;
@@ -1038,21 +1154,38 @@ function renderLibrary(){
   </div>`;
 }
 
-/* ============ IDEA EDITOR ============ */
+/* ============ IDEA EDITOR — 3 langkah: Ide → Hook → Caption & Simpan ============ */
+const EDITOR_STEPS = [
+  {n:1, label:'Ide'},
+  {n:2, label:'Hook'},
+  {n:3, label:'Caption'}
+];
+
+function resetAiStates(){
+  aiReqId++; capReqId++; // batalin hasil AI yang masih jalan
+  aiState = {status:'idle', hooks:[], error:'', code:''};
+  capState = {status:'idle', error:'', code:''};
+}
+
 function openEditor(id, presetDate){
   editingId = id;
   if(id==='new'){
-    draftIdea = {id:'new', text:'', format:'', hook:'', scheduledDate:presetDate||null, checklist:{}, createdAt:new Date().toISOString()};
+    draftIdea = {id:'new', text:'', format:'', reference:'', hook:'', caption:'', scheduledDate:presetDate||null, checklist:{}, createdAt:new Date().toISOString()};
   } else {
     const found = ideas.find(i=>i.id===id);
     draftIdea = JSON.parse(JSON.stringify(found));
+    draftIdea.reference = draftIdea.reference || '';
+    draftIdea.hook = draftIdea.hook || '';
+    draftIdea.caption = draftIdea.caption || '';
   }
+  editorStep = 1;
+  resetAiStates();
   pickerTarget = null;
   render();
 }
 function closeEditor(){
-  aiReqId++; // batalin hasil AI yang masih jalan
-  aiState = {status:'idle', hooks:[], error:'', code:''};
+  resetAiStates();
+  editorStep = 1;
   editingId = null;
   draftIdea = null;
   pickerTarget = null;
@@ -1062,17 +1195,60 @@ function closeEditor(){
 function syncEditorFieldsIntoDraft(){
   if(!draftIdea) return;
   const t = document.getElementById('editIdeaText');
+  const r = document.getElementById('editRefText');
   const h = document.getElementById('editHookText');
+  const c = document.getElementById('editCaptionText');
   const d = document.getElementById('editDate');
   if(t) draftIdea.text = t.value;
+  if(r) draftIdea.reference = r.value;
   if(h) draftIdea.hook = h.value;
+  if(c) draftIdea.caption = c.value;
   if(d) draftIdea.scheduledDate = d.value || null;
+}
+
+function goStep(n){
+  syncEditorFieldsIntoDraft();
+  editorStep = n;
+  render();
+}
+function nextStep(){
+  syncEditorFieldsIntoDraft();
+  if(editorStep===1){
+    if(!draftIdea.text.trim()){ showToast('Tulis dulu hook atau ide kamu ya'); return; }
+    if(!draftIdea.format){ showToast('Pilih dulu mau bikin konten apa'); return; }
+  } else if(editorStep===2){
+    if(!(draftIdea.hook||'').trim()){ showToast('Pilih atau tulis hook dulu ya'); return; }
+  }
+  editorStep = Math.min(3, editorStep+1);
+  render();
 }
 
 function renderEditorSheet(){
   const idea = draftIdea;
   if(!idea) return '';
   if(pickerTarget) return renderHookPickerSheet();
+
+  const step = editorStep;
+  const tabs = EDITOR_STEPS.map(s=>`
+    <button type="button" class="step-tab ${step===s.n?'active':(s.n<step?'done':'')}" data-step="${s.n}">
+      <span class="step-num">${s.n<step ? ico('check') : s.n}</span>${s.label}
+    </button>`).join('');
+
+  let body = '';
+  if(step===1) body = renderStepIdea();
+  else if(step===2) body = renderStepHook();
+  else body = renderStepCaption();
+
+  const isLast = step===3;
+  const footer = `
+    <div style="display:flex;gap:10px;margin-top:20px;">
+      ${step>1 ? `<button type="button" class="btn-ghost" style="flex:1;" id="prevStepBtn">Kembali</button>` : ''}
+      ${isLast
+        ? `<button type="button" class="btn-primary" style="flex:2;" id="saveEditBtn">Simpan</button>`
+        : `<button type="button" class="btn-primary" style="flex:2;" id="nextStepBtn">${step===1 ? 'Lanjut: Bikin Hook' : 'Lanjut: Caption'}</button>`}
+    </div>
+    ${!isLast ? `<div style="text-align:center;margin-top:12px;"><button type="button" class="link-btn" id="saveEditBtn">Simpan dulu, lanjutin nanti</button></div>` : ''}
+    ${idea.id!=='new' ? `<div style="text-align:center;margin-top:12px;"><button type="button" class="link-btn" style="color:#B23B2A;" id="deleteIdeaBtn">Hapus ide ini</button></div>` : ''}`;
 
   return `
   <div class="modal-overlay" id="editorOverlay">
@@ -1082,99 +1258,160 @@ function renderEditorSheet(){
         <div class="close-x" id="closeEditor">${ico('close')}</div>
         <h2 style="font-size:19px;margin:0 0 14px;">Atur Ide</h2>
       </div>
-
-      <div class="field-label">Ide kamu</div>
-      <div class="card" style="padding:12px;">
-        <textarea id="editIdeaText" rows="3">${escapeHtml(idea.text)}</textarea>
-      </div>
-
-      <div class="field-label">Format</div>
-      <div class="pill-row">
-        ${FORMATS.map(f=>`<div class="pill ${idea.format===f?'active':''}" data-format="${f}">${f}</div>`).join('')}
-      </div>
-
-      <div class="field-label">Hook</div>
-      <div style="font-size:12.5px;color:var(--ink-soft);margin:-4px 0 8px;line-height:1.5;">Setelah pilih hook, edit kalimatnya dengan bahasa kamu ya.</div>
-      <div class="card" style="padding:12px;">
-        <textarea id="editHookText" rows="3" placeholder="Tulis hook sendiri, atau pilih di bawah — nanti otomatis dirangkai jadi 1 hook utuh bareng ide di atas">${escapeHtml(idea.hook||'')}</textarea>
-        ${renderHookModeControls()}
-      </div>
-
-      <div class="field-label">Jadwalkan (opsional)</div>
-      <div class="card" style="padding:12px;">
-        <input type="date" id="editDate" value="${idea.scheduledDate||''}">
-      </div>
-
-      <div style="display:flex;gap:10px;margin-top:18px;">
-        ${idea.id!=='new' ? `<button class="btn-ghost" style="flex:1;color:#B23B2A;border-color:rgba(178,59,42,.3);" id="deleteIdeaBtn">${ico('trash')} Hapus</button>` : ''}
-        <button class="btn-primary" style="flex:2;" id="saveEditBtn">Simpan</button>
-      </div>
+      <div class="steps">${tabs}</div>
+      ${body}
+      ${footer}
     </div>
   </div>`;
+}
+
+/* Langkah 1 — tulis hook/ide, pilih jenis konten, referensi (opsional) */
+function renderStepIdea(){
+  const idea = draftIdea;
+  return `
+    <div class="field-label" style="margin-top:4px;">Hook / ide kamu</div>
+    <div class="card" style="padding:12px;">
+      <textarea id="editIdeaText" rows="3" placeholder="Tulis hook atau ide kasar kamu di sini...">${escapeHtml(idea.text)}</textarea>
+    </div>
+
+    <div class="field-label">Mau bikin konten apa?</div>
+    <div class="pill-row">
+      ${FORMATS.map(f=>`<div class="pill ${idea.format===f?'active':''}" data-format="${f}">${f}</div>`).join('')}
+    </div>
+
+    <div class="field-label">Referensi (opsional)</div>
+    <div style="font-size:12.5px;color:var(--ink-soft);margin:-4px 0 8px;line-height:1.5;">Tempel hook atau caption yang gayanya kamu suka. AI bakal ngikutin gaya dan polanya, bukan nyalin isinya.</div>
+    <div class="card" style="padding:12px;">
+      <textarea id="editRefText" rows="3" placeholder="Contoh: Hook atau caption viral yang mau kamu tiru gayanya">${escapeHtml(idea.reference||'')}</textarea>
+    </div>`;
+}
+
+/* Langkah 2 — generate hook (AI atau template), pilih, edit */
+function renderStepHook(){
+  const idea = draftIdea;
+  const preview = idea.text.length>140 ? idea.text.slice(0,140)+'…' : idea.text;
+  return `
+    <div class="card" style="padding:14px;">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
+        ${idea.format ? `<span class="tag">${idea.format}</span>` : `<span class="tag muted">Belum ada format</span>`}
+        ${hasReference(idea.reference) ? `<span class="tag muted">${ico('target')} Pakai referensi</span>` : ''}
+      </div>
+      <div style="font-size:14px;line-height:1.5;color:var(--ink-soft);">${escapeHtml(preview)}</div>
+    </div>
+
+    <div class="field-label">Bikin hook</div>
+    <div class="card" style="padding:12px;">
+      ${renderHookModeControls()}
+    </div>
+    ${renderAiResults()}
+
+    <div class="field-label">Hook kamu</div>
+    <div style="font-size:12.5px;color:var(--ink-soft);margin:-4px 0 8px;line-height:1.5;">Hook yang kamu pilih muncul di sini. Boleh diedit atau ditulis sendiri.</div>
+    <div class="card" style="padding:12px;">
+      <textarea id="editHookText" rows="3" placeholder="Pilih hook di atas, atau tulis hook kamu sendiri">${escapeHtml(idea.hook||'')}</textarea>
+    </div>`;
+}
+
+/* Langkah 3 — generate caption, jadwal, simpan */
+function renderStepCaption(){
+  const idea = draftIdea;
+  const hasKey = !!getApiKey();
+  const loading = capState.status==='loading';
+  let capNote = '';
+  if(hasReference(idea.reference)) capNote += `${ico('target')} Caption disesuaikan dengan referensi kamu. `;
+  capNote += hasKey
+    ? `${ico('key')} API key tersimpan di perangkat ini · <button type="button" class="link-btn" data-open-settings>Atur</button>`
+    : `Butuh API key Gemini (gratis dari Google AI Studio). <button type="button" class="link-btn" data-open-settings>Atur sekarang</button>`;
+  const needsSettings = capState.code==='key' || capState.code==='model';
+  const genLabel = idea.caption && idea.caption.trim() ? 'Generate ulang caption' : 'Generate caption dengan AI';
+
+  return `
+    <div class="field-label" style="margin-top:4px;">Hook terpilih</div>
+    <div class="choice-card selected" style="margin-bottom:0;">
+      <div style="font-size:14.5px;line-height:1.5;">${escapeHtml(idea.hook||'')}</div>
+      <div style="margin-top:8px;"><button type="button" class="link-btn" data-step="2">Ubah hook</button></div>
+    </div>
+
+    <div class="field-label">Caption</div>
+    ${capState.status==='error' ? `
+      <div class="error-box">${escapeHtml(capState.error)}</div>
+      ${needsSettings ? `<button type="button" class="btn-secondary" style="margin-bottom:10px;" data-open-settings="caption">${ico('key')} Cek API key &amp; model</button>` : ''}` : ''}
+    <div class="card" style="padding:12px;">
+      <textarea id="editCaptionText" rows="8" placeholder="Generate pakai AI, atau tulis caption kamu sendiri di sini">${escapeHtml(idea.caption||'')}</textarea>
+      <button type="button" class="btn-primary" style="margin-top:10px;" id="capGenerateBtn" ${loading?'disabled':''}>
+        ${loading ? 'AI lagi nulis caption...' : `${ico('sparkle')} ${genLabel}`}
+      </button>
+      <div class="ai-note">${capNote}</div>
+    </div>
+
+    <div class="field-label">Jadwalkan (opsional)</div>
+    <div class="card" style="padding:12px;">
+      <input type="date" id="editDate" value="${idea.scheduledDate||''}">
+    </div>`;
 }
 
 /* Pilihan cara bikin hook: AI (BYOK) atau Template */
 function renderHookModeControls(){
   const mode = getHookMode();
   const hasKey = !!getApiKey();
+  const hasRef = hasReference(draftIdea && draftIdea.reference);
+  const loading = aiState.status==='loading';
   const seg = `
-    <div class="seg">
+    <div class="seg" style="margin-top:0;">
       <button type="button" class="seg-btn ${mode==='ai'?'active':''}" data-hook-mode="ai">${ico('sparkle')} Pakai AI</button>
       <button type="button" class="seg-btn ${mode==='template'?'active':''}" data-hook-mode="template">${ico('book2')} Pakai Template</button>
     </div>`;
   if(mode==='ai'){
+    const label = (aiState.status==='done' || aiState.status==='error') ? 'Generate ulang' : 'Generate hook dengan AI';
     return seg + `
-    <button type="button" class="btn-primary" style="margin-top:12px;" id="aiGenerateBtn">${ico('sparkle')} Generate hook dengan AI</button>
-    <div class="ai-note">${hasKey
+    <button type="button" class="btn-primary" style="margin-top:12px;" id="aiGenerateBtn" ${loading?'disabled':''}>${ico('sparkle')} ${label}</button>
+    <div class="ai-note">${hasRef ? `${ico('target')} Hook disesuaikan dengan referensi kamu. ` : ''}${hasKey
       ? `${ico('key')} API key tersimpan di perangkat ini · <button type="button" class="link-btn" data-open-settings>Atur</button>`
       : `Butuh API key Gemini (gratis dari Google AI Studio). <button type="button" class="link-btn" data-open-settings>Atur sekarang</button>`}</div>`;
   }
   return seg + `
     <div style="display:flex;gap:8px;margin-top:12px;">
-      <button class="btn-ghost" style="flex:1;" id="pickHookBtn">${ico('book2')} Pilih dari 60 Hook</button>
-      <button class="btn-ghost" style="flex:1;" id="pickTemplateBtn">${ico('target')} Pakai Template</button>
-    </div>`;
+      <button type="button" class="btn-ghost" style="flex:1;" id="pickHookBtn">${ico('book2')} Pilih dari 60 Hook</button>
+      <button type="button" class="btn-ghost" style="flex:1;" id="pickTemplateBtn">${ico('target')} Pakai Template</button>
+    </div>
+    ${hasRef ? `<div class="ai-note">Referensi dipakai di mode AI. Di mode Template, kamu pilih sendiri kalimatnya.</div>` : ''}`;
 }
 
-/* Sheet hasil AI: loading / error / daftar hook */
-function renderAiPickerSheet(){
-  let inner = '';
+/* Hasil generate hook (inline di langkah 2): loading / error / daftar pilihan */
+function renderAiResults(){
+  if(getHookMode()!=='ai') return '';
   if(aiState.status==='loading'){
-    inner = `
-      <div style="text-align:center;padding:28px 10px 24px;">
+    return `
+      <div style="text-align:center;padding:26px 10px 6px;">
         <div class="spinner"></div>
         <div style="font-weight:700;font-size:14.5px;">AI lagi meracik hook buat idemu...</div>
         <div style="font-size:12.5px;color:var(--ink-soft);margin-top:6px;">Biasanya cuma beberapa detik.</div>
       </div>`;
-  } else if(aiState.status==='error'){
+  }
+  if(aiState.status==='error'){
     const needsSettings = aiState.code==='key' || aiState.code==='model';
-    inner = `
-      <div class="error-box">${escapeHtml(aiState.error)}</div>
-      ${needsSettings ? `<button class="btn-primary" style="margin-bottom:10px;" data-open-settings="retry">${ico('key')} Cek API key &amp; model</button>` : ''}
-      <button class="${needsSettings?'btn-secondary':'btn-primary'}" id="aiRegenBtn">${ico('sparkle')} Coba lagi</button>`;
-  } else {
-    inner = `
-      <div style="font-size:12.5px;color:var(--ink-soft);margin:-4px 0 12px;line-height:1.5;">Pilih satu, nanti bisa kamu edit lagi dengan bahasamu sendiri.</div>
-      ${aiState.hooks.map(h=>`
-        <div class="template-card">
+    return `
+      <div style="margin-top:14px;">
+        <div class="error-box">${escapeHtml(aiState.error)}</div>
+        ${needsSettings ? `<button type="button" class="btn-secondary" data-open-settings="hook">${ico('key')} Cek API key &amp; model</button>` : ''}
+      </div>`;
+  }
+  if(aiState.status==='done'){
+    const current = (draftIdea.hook||'').trim();
+    return `
+      <div class="field-label">Pilih satu hook</div>
+      ${aiState.hooks.map(h=>{
+        const sel = current===h;
+        return `
+        <div class="choice-card ${sel?'selected':''}">
           <div style="font-size:14.5px;line-height:1.5;">${escapeHtml(h)}</div>
           <div style="margin-top:10px;display:flex;justify-content:flex-end;">
-            <button class="use-btn" data-use-hook="${escapeHtml(h)}">Pakai</button>
+            <button type="button" class="use-btn" data-use-hook="${escapeHtml(h)}">${sel ? ico('check')+' Terpilih' : 'Pakai'}</button>
           </div>
-        </div>`).join('')}
-      <button class="btn-secondary" style="margin-top:6px;" id="aiRegenBtn">${ico('shuffle')} Generate ulang</button>`;
+        </div>`;
+      }).join('')}`;
   }
-  return `
-  <div class="modal-overlay" id="pickerOverlay">
-    <div class="sheet">
-      <div class="sheet-handle"></div>
-      <div style="position:relative;">
-        <div class="close-x" id="closePicker">${ico('close')}</div>
-        <h2 style="font-size:18px;margin:0 0 14px;">Hook dari AI</h2>
-      </div>
-      ${inner}
-    </div>
-  </div>`;
+  return '';
 }
 
 /* Sheet pengaturan BYOK */
@@ -1216,7 +1453,6 @@ function renderSettingsSheet(){
 }
 
 function renderHookPickerSheet(){
-  if(pickerTarget==='ai') return renderAiPickerSheet();
   if(pickerTarget==='templates'){
     return `
     <div class="modal-overlay" id="pickerOverlay">
@@ -1330,7 +1566,9 @@ function attachEvents(){
     const text = draftIdea.text.trim();
     if(!text){ showToast('Ide nggak boleh kosong'); return; }
     draftIdea.text = text;
-    draftIdea.hook = draftIdea.hook.trim();
+    draftIdea.reference = (draftIdea.reference||'').trim();
+    draftIdea.hook = (draftIdea.hook||'').trim();
+    draftIdea.caption = (draftIdea.caption||'').trim();
     const wasScheduled = !!draftIdea.scheduledDate;
     if(draftIdea.id==='new'){
       draftIdea.id = uid();
@@ -1362,8 +1600,9 @@ function attachEvents(){
   });
   document.querySelectorAll('[data-use-hook]').forEach(el=>{
     el.onclick = ()=>{
-      const payload = (draftIdea.text||'').trim();
-      draftIdea.hook = el.dataset.useHook + (payload ? ('\n\n'+payload) : '');
+      // Hook disimpan sendiri; ide tetap di field ide dan dipakai lagi pas bikin caption
+      syncEditorFieldsIntoDraft();
+      draftIdea.hook = el.dataset.useHook;
       pickerTarget=null; render();
     };
   });
@@ -1374,6 +1613,17 @@ function attachEvents(){
       pickerTarget=null; render();
     };
   });
+
+  /* --- Langkah editor: Ide → Hook → Caption --- */
+  document.querySelectorAll('[data-step]').forEach(el=>{
+    el.onclick = ()=>goStep(parseInt(el.dataset.step, 10));
+  });
+  const nextStepBtn = document.getElementById('nextStepBtn');
+  if(nextStepBtn) nextStepBtn.onclick = ()=>nextStep();
+  const prevStepBtn = document.getElementById('prevStepBtn');
+  if(prevStepBtn) prevStepBtn.onclick = ()=>goStep(Math.max(1, editorStep-1));
+  const capGenerateBtn = document.getElementById('capGenerateBtn');
+  if(capGenerateBtn) capGenerateBtn.onclick = ()=>startCaptionGenerate();
 
   document.querySelectorAll('[data-acc]').forEach(el=>{
     el.onclick = ()=>{ const k=el.dataset.acc; libAccordionOpen[k]=!libAccordionOpen[k]; render(); };
@@ -1396,11 +1646,9 @@ function attachEvents(){
   });
   const aiGenerateBtn = document.getElementById('aiGenerateBtn');
   if(aiGenerateBtn) aiGenerateBtn.onclick = ()=>startAiGenerate();
-  const aiRegenBtn = document.getElementById('aiRegenBtn');
-  if(aiRegenBtn) aiRegenBtn.onclick = ()=>startAiGenerate();
 
   document.querySelectorAll('[data-open-settings]').forEach(el=>{
-    el.onclick = ()=>openSettings(el.dataset.openSettings==='retry');
+    el.onclick = ()=>openSettings(el.dataset.openSettings || '');
   });
   const closeSettingsBtn = document.getElementById('closeSettings');
   if(closeSettingsBtn) closeSettingsBtn.onclick = closeSettings;
@@ -1421,14 +1669,17 @@ function attachEvents(){
     if(!saved){ showToast('Browser nggak mau nyimpen key (mode private?)'); return; }
     settingsOpen = false;
     showToast('API key tersimpan '+ico('check'));
-    if(pendingGenerate){ pendingGenerate = false; startAiGenerate(); }
+    const retry = pendingGenerate;
+    pendingGenerate = '';
+    if(retry==='hook') startAiGenerate();
+    else if(retry==='caption') startCaptionGenerate();
     else render();
   };
   const clearKeyBtn = document.getElementById('clearKeyBtn');
   if(clearKeyBtn) clearKeyBtn.onclick = ()=>{
     lsSet(LS_AI_KEY, '');
     settingsOpen = false;
-    pendingGenerate = false;
+    pendingGenerate = '';
     showToast('API key dihapus dari perangkat ini');
     render();
   };
