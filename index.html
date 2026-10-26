@@ -720,6 +720,10 @@ function mapGeminiHttpError(status, data, model){
   return aiError('other', 'Gagal generate (kode ' + status + ').' + (raw ? ' ' + raw.slice(0, 140) : ''));
 }
 
+const THREAD_FORMAT = 'Utas Threads';
+const THREADS_POST_LIMIT = 500;
+const THREAD_SEP = '\n\n---\n\n';
+
 const FORMAT_CAPTION_GUIDE = {
   Reels: 'caption singkat 3-6 baris pendek, enak dibaca sambil nonton',
   TikTok: 'caption pendek 2-4 baris dengan nada ringan',
@@ -729,67 +733,109 @@ const FORMAT_CAPTION_GUIDE = {
 };
 
 function hasReference(ref){ return !!(ref && String(ref).trim()); }
+function isThread(format){ return format === THREAD_FORMAT; }
+function splitThread(text){
+  return String(text || '').split(/\n\s*-{3,}\s*\n/).map(s => s.trim()).filter(Boolean);
+}
 
 function buildHookPrompt(ideaText, format, reference){
   const hasRef = hasReference(reference);
+  const thread = isThread(format);
   const rules = [
-    'Kamu copywriter konten video pendek berbahasa Indonesia.',
-    'Tugasmu: menulis HOOK, yaitu kalimat pembuka di 1-3 detik pertama yang bikin orang berhenti scroll.',
-    'Aturan:',
+    'Kamu copywriter konten media sosial berbahasa Indonesia, ahli menulis hook yang bikin orang berhenti scroll.',
+    'Tugasmu: menulis HOOK, yaitu kalimat pembuka (1-3 detik pertama video, atau baris pertama postingan) untuk IDE pengguna.',
+    'Aturan umum:',
     '- Bahasa Indonesia santai sehari-hari (aku/kamu), kayak ngobrol sama teman.',
-    '- Satu kalimat per hook, maksimal 15 kata.',
     '- Tanpa hashtag dan tanpa emoji.',
     '- Jangan mengarang angka, hasil, atau klaim yang nggak ada di ide.',
-    '- Jangan menyalin contoh mentah-mentah; sesuaikan dengan isi ide.',
-    '- Buat ' + AI_HOOK_COUNT + ' hook dengan sudut pandang yang beda-beda.'
+    thread
+      ? '- Ini hook untuk POST PERTAMA utas Threads: SINGKAT, maksimal 12 kata, satu kalimat tajam yang bikin orang berhenti scroll dan penasaran baca lanjutannya.'
+      : '- Satu kalimat per hook, maksimal 15 kata.'
   ];
+
   if(hasRef){
     rules.push(
-      '- Pengguna memberi REFERENSI. Pelajari gaya, pola kalimat, panjang, nada, dan teknik pembukanya, lalu tulis hook BARU tentang ide pengguna dengan gaya yang sama.',
-      '- Jangan menyalin kata atau kalimat dari referensi, dan jangan membawa topik atau klaim referensi ke hook.'
+      '',
+      'ATURAN REFERENSI (WAJIB DIIKUTI):',
+      '- Pengguna menempelkan REFERENSI konten viral. Referensi ini acuan UTAMA dan lebih penting daripada gaya umum mana pun.',
+      '- Langkah 1, bedah referensi: tangkap rumusnya, yaitu teknik pembuka (misalnya perintah "stop", pertanyaan, angka, pengakuan, kontras, larangan), struktur kalimat, panjang, nada, dan tanda baca.',
+      '- Langkah 2, tulis hook BARU tentang IDE pengguna memakai rumus yang SAMA. Semua hook harus terasa seperti saudara kandung referensi: teknik pembuka dan struktur kalimat sama, panjang mirip, nada sama.',
+      '- Boleh ganti kata dan topik, tapi jangan ganti rumusnya. Jangan menyalin kalimat referensi mentah-mentah dan jangan membawa topik atau klaim referensi.',
+      '- Variasi antar hook cukup di pilihan kata atau detail; rumusnya tetap sama.',
+      '- Contoh cara kerja (hanya ilustrasi): referensi "Stop scroll! 3 kesalahan yang bikin jualanmu sepi." berpola [perintah stop] + [angka] + [akibat negatif]. Untuk ide "cara menabung", hasilnya: "Stop nabung begini! 3 kebiasaan yang bikin dompetmu bocor."',
+      '',
+      'Buat ' + AI_HOOK_COUNT + ' hook.',
+      'Balas HANYA berupa JSON object seperti ini, tanpa penjelasan lain: {"pola_referensi":"rumus referensi dalam 1-2 kalimat","hooks":[' + AI_HOOK_COUNT + ' string]}'
+    );
+  } else {
+    rules.push(
+      '- Jangan menyalin contoh mentah-mentah; sesuaikan dengan isi ide.',
+      '- Buat ' + AI_HOOK_COUNT + ' hook dengan sudut pandang yang beda-beda.',
+      'Balas HANYA berupa JSON array berisi ' + AI_HOOK_COUNT + ' string, tanpa penjelasan lain.'
     );
   }
-  rules.push('Balas HANYA berupa JSON array berisi ' + AI_HOOK_COUNT + ' string, tanpa penjelasan lain.');
 
-  let user = 'Ide konten:\n"""\n' + String(ideaText).slice(0, 1500) + '\n"""\n' +
-             (format ? 'Format konten: ' + format + '\n' : '');
+  const ideaBlock = 'IDE PENGGUNA (isi hook diambil dari sini):\n"""\n' + String(ideaText).slice(0, 1500) + '\n"""\n' +
+                    (format ? 'Format konten: ' + format + '\n' : '');
+  let user;
   if(hasRef){
-    // Referensi user jadi acuan utama, jadi contoh library nggak dipakai supaya gayanya nggak campur
-    user += '\nREFERENSI (tiru gaya dan polanya saja, bukan isinya):\n"""\n' + String(reference).slice(0, 1500) + '\n"""\n';
+    // Referensi ditaruh duluan supaya jadi acuan utama, contoh library sengaja nggak dipakai biar gayanya nggak campur
+    user = 'REFERENSI KONTEN VIRAL (tiru rumus dan polanya, bukan isinya):\n"""\n' + String(reference).slice(0, 1500) + '\n"""\n\n' + ideaBlock;
   } else {
     // Tanpa referensi: contoh gaya diambil dari library sendiri (data.js) biar nada hook-nya nyambung sama brand
     const refs = HOOKS_60.map(c => '- ' + c.name + ': "' + c.items[0] + '" / "' + (c.items[1] || c.items[0]) + '"').join('\n');
     const pats = VIRAL_TEMPLATES.map(t => '- ' + t.type + ': ' + t.tpl).join('\n');
-    user += '\nContoh nada hook (referensi gaya saja):\n' + refs +
-            '\n\nPola kalimat yang boleh dipakai sebagai kerangka:\n' + pats;
+    user = ideaBlock + '\nContoh nada hook (referensi gaya saja):\n' + refs +
+           '\n\nPola kalimat yang boleh dipakai sebagai kerangka:\n' + pats;
   }
   return {system: rules.join('\n'), user};
 }
 
 function buildCaptionPrompt(idea){
   const hasRef = hasReference(idea.reference);
-  const guide = FORMAT_CAPTION_GUIDE[idea.format] || 'caption singkat yang enak dibaca';
-  const rules = [
-    'Kamu copywriter konten media sosial berbahasa Indonesia.',
-    'Tugasmu: menulis CAPTION untuk konten ' + (idea.format || 'media sosial') + ' berupa ' + guide + '.',
-    'Aturan:',
-    '- Bahasa Indonesia santai sehari-hari (aku/kamu), kayak ngobrol sama teman.',
-    '- Baris pertama caption adalah HOOK yang sudah dipilih pengguna, tulis persis seperti aslinya.',
-    '- Lanjutkan dengan isi yang berasal dari ide pengguna, paragraf pendek dan gampang di-scan.',
-    '- Tutup dengan ajakan (CTA) yang natural, misalnya simpan, bagikan, atau komentar.',
-    '- Tambahkan 3-5 hashtag relevan di baris paling akhir. Emoji boleh, maksimal 2.',
-    '- Jangan mengarang angka, hasil, atau klaim yang nggak ada di ide.'
-  ];
-  if(hasRef){
-    rules.push('- Pengguna memberi REFERENSI. Ikuti gaya penulisan, panjang, nada, struktur paragraf, dan pola ajakannya, tapi isinya tentang ide pengguna. Jangan menyalin kalimat dari referensi.');
+  const thread = isThread(idea.format);
+  let rules;
+  if(thread){
+    rules = [
+      'Kamu copywriter Threads berbahasa Indonesia.',
+      'Tugasmu: menulis UTAS (thread) Threads dari ide pengguna, 5 sampai 7 post.',
+      'Aturan:',
+      '- Bahasa Indonesia santai sehari-hari (aku/kamu), kayak ngobrol sama teman.',
+      '- POST 1 adalah HOOK yang sudah dipilih pengguna: tulis persis seperti aslinya, singkat, bikin orang berhenti scroll. Jangan tambahkan apa pun ke post 1.',
+      '- Post 2 dan seterusnya mengembangkan ide: satu gagasan per post, kalimat pendek, maksimal 400 karakter per post.',
+      '- Post terakhir berisi ajakan (CTA) yang natural, misalnya follow, simpan, atau komentar.',
+      '- Tanpa penomoran (1/, 2/). Tanpa hashtag, kecuali maksimal 1 di post terakhir. Emoji maksimal 2 di seluruh utas.',
+      '- Jangan mengarang angka, hasil, atau klaim yang nggak ada di ide.'
+    ];
+  } else {
+    const guide = FORMAT_CAPTION_GUIDE[idea.format] || 'caption singkat yang enak dibaca';
+    rules = [
+      'Kamu copywriter konten media sosial berbahasa Indonesia.',
+      'Tugasmu: menulis CAPTION untuk konten ' + (idea.format || 'media sosial') + ' berupa ' + guide + '.',
+      'Aturan:',
+      '- Bahasa Indonesia santai sehari-hari (aku/kamu), kayak ngobrol sama teman.',
+      '- Baris pertama caption adalah HOOK yang sudah dipilih pengguna, tulis persis seperti aslinya.',
+      '- Lanjutkan dengan isi yang berasal dari ide pengguna, paragraf pendek dan gampang di-scan.',
+      '- Tutup dengan ajakan (CTA) yang natural, misalnya simpan, bagikan, atau komentar.',
+      '- Tambahkan 3-5 hashtag relevan di baris paling akhir. Emoji boleh, maksimal 2.',
+      '- Jangan mengarang angka, hasil, atau klaim yang nggak ada di ide.'
+    ];
   }
-  rules.push('Balas HANYA berupa teks caption siap posting, tanpa penjelasan dan tanpa tanda kutip pembuka/penutup.');
+  if(hasRef){
+    rules.push(
+      '- Pengguna memberi REFERENSI konten viral. Bedah dulu gaya penulisannya (struktur, panjang, nada, pola ajakan), lalu tulis dengan rumus yang sama tapi isinya tentang ide pengguna. Jangan menyalin kalimat dari referensi.'
+    );
+  }
+  rules.push(thread
+    ? 'Pisahkan antar post dengan satu baris berisi tepat tiga tanda strip: ---\nBalas HANYA berupa isi utas, tanpa penjelasan.'
+    : 'Balas HANYA berupa teks caption siap posting, tanpa penjelasan dan tanpa tanda kutip pembuka/penutup.');
 
-  let user = 'Ide konten:\n"""\n' + String(idea.text).slice(0, 1500) + '\n"""\n' +
-             '\nHook terpilih:\n"""\n' + String(idea.hook).slice(0, 500) + '\n"""\n';
+  let user = '';
   if(hasRef){
-    user += '\nREFERENSI (tiru gaya dan polanya saja, bukan isinya):\n"""\n' + String(idea.reference).slice(0, 1500) + '\n"""\n';
+    user += 'REFERENSI KONTEN VIRAL (tiru gaya dan polanya, bukan isinya):\n"""\n' + String(idea.reference).slice(0, 1500) + '\n"""\n\n';
   }
+  user += 'IDE PENGGUNA:\n"""\n' + String(idea.text).slice(0, 1500) + '\n"""\n' +
+          '\nHook terpilih:\n"""\n' + String(idea.hook).slice(0, 500) + '\n"""\n';
   return {system: rules.join('\n'), user};
 }
 
@@ -859,19 +905,40 @@ async function callGemini(system, user, asJson){
   return parts.filter(p => p && !p.thought && typeof p.text === 'string').map(p => p.text).join('');
 }
 
+/* Hasil hook: daftar hook + (kalau ada referensi) pola referensi yang berhasil dibaca AI */
+function parseHookResult(text){
+  const t = String(text || '').trim()
+    .replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  try{
+    const j = JSON.parse(t);
+    if(j && !Array.isArray(j) && Array.isArray(j.hooks)){
+      const insight = typeof j.pola_referensi === 'string' ? j.pola_referensi.replace(/\s+/g, ' ').trim().slice(0, 300) : '';
+      return {hooks: cleanHookList(j.hooks), insight};
+    }
+  }catch(e){}
+  return {hooks: parseHookList(t), insight: ''};
+}
+
 async function generateHooksWithGemini(ideaText, format, reference){
   const {system, user} = buildHookPrompt(ideaText, format, reference);
   const text = await callGemini(system, user, true);
-  const hooks = parseHookList(text);
-  if(!hooks.length) throw aiError('empty', 'AI nggak ngasih hasil yang bisa dipakai. Coba generate ulang.');
-  return hooks;
+  const result = parseHookResult(text);
+  if(!result.hooks.length) throw aiError('empty', 'AI nggak ngasih hasil yang bisa dipakai. Coba generate ulang.');
+  return result;
 }
 
 async function generateCaptionWithGemini(idea){
   const {system, user} = buildCaptionPrompt(idea);
   const text = await callGemini(system, user, false);
-  const caption = String(text || '').trim()
+  let caption = String(text || '').trim()
     .replace(/^```(?:\w+)?\s*/i, '').replace(/\s*```$/, '').trim();
+  if(isThread(idea.format)){
+    // Utas: post 1 selalu hook yang dipilih user (singkat), sisanya dari AI
+    const posts = splitThread(caption);
+    if(posts.length < 2) throw aiError('empty', 'AI nggak ngasih utas yang bisa dipakai. Coba generate ulang.');
+    posts[0] = String(idea.hook).trim();
+    caption = posts.join(THREAD_SEP);
+  }
   if(caption.length < 10) throw aiError('empty', 'AI nggak ngasih caption yang bisa dipakai. Coba generate ulang.');
   return caption;
 }
@@ -896,15 +963,15 @@ async function startAiGenerate(){
   }
   if(!getApiKey()){ openSettings('hook'); return; }
   const myId = ++aiReqId;
-  aiState = {status:'loading', hooks:[], error:'', code:''};
+  aiState = {status:'loading', hooks:[], insight:'', error:'', code:''};
   render();
   try{
-    const hooks = await generateHooksWithGemini(draftIdea.text, draftIdea.format, draftIdea.reference);
+    const res = await generateHooksWithGemini(draftIdea.text, draftIdea.format, draftIdea.reference);
     if(myId !== aiReqId) return;
-    aiState = {status:'done', hooks, error:'', code:''};
+    aiState = {status:'done', hooks:res.hooks, insight:res.insight, usedRef:hasReference(draftIdea.reference), error:'', code:''};
   }catch(e){
     if(myId !== aiReqId) return;
-    aiState = {status:'error', hooks:[], error:e.message || 'Gagal generate.', code:e.code || 'other'};
+    aiState = {status:'error', hooks:[], insight:'', error:e.message || 'Gagal generate.', code:e.code || 'other'};
   }
   if(draftIdea){ syncEditorFieldsIntoDraft(); render(); }
 }
@@ -1380,10 +1447,10 @@ function renderStepIdea(){
       ${FORMATS.map(f=>`<div class="pill ${idea.format===f?'active':''}" data-format="${f}">${f}</div>`).join('')}
     </div>
 
-    <div class="field-label">Referensi (opsional)</div>
-    <div style="font-size:12.5px;color:var(--ink-soft);margin:-4px 0 8px;line-height:1.5;">Tempel hook atau caption yang gayanya kamu suka. AI bakal ngikutin gaya dan polanya, bukan nyalin isinya.</div>
+    <div class="field-label">Referensi konten viral (opsional)</div>
+    <div style="font-size:12.5px;color:var(--ink-soft);margin:-4px 0 8px;line-height:1.5;">Tempel hook, caption, atau script konten viral yang mau kamu tiru. AI membaca rumusnya (pembuka, struktur, panjang, nada), lalu membuat hook dan caption dengan pola yang sama tapi isinya tentang ide kamu.</div>
     <div class="card" style="padding:12px;">
-      <textarea id="editRefText" rows="3" placeholder="Contoh: Hook atau caption viral yang mau kamu tiru gayanya">${escapeHtml(idea.reference||'')}</textarea>
+      <textarea id="editRefText" rows="4" placeholder="Contoh: Stop scroll! 3 kesalahan yang bikin jualanmu sepi.">${escapeHtml(idea.reference||'')}</textarea>
     </div>`;
 }
 
@@ -1424,23 +1491,35 @@ function renderStepCaption(){
     ? `${ico('key')} API key tersimpan di perangkat ini · <button type="button" class="link-btn" data-open-settings>Atur</button>`
     : `Butuh API key Gemini (gratis dari Google AI Studio). <button type="button" class="link-btn" data-open-settings>Atur sekarang</button>`;
   const needsSettings = capState.code==='key' || capState.code==='model';
-  const genLabel = idea.caption && idea.caption.trim() ? 'Generate ulang caption' : 'Generate caption dengan AI';
+  const thread = isThread(idea.format);
+  const noun = thread ? 'utas' : 'caption';
+  const genLabel = idea.caption && idea.caption.trim() ? `Generate ulang ${noun}` : `Generate ${noun} dengan AI`;
+  let threadInfo = '';
+  if(thread){
+    const posts = splitThread(idea.caption);
+    const tooLong = posts.map((p,i)=>({n:i+1, len:p.length})).filter(x=>x.len>THREADS_POST_LIMIT);
+    threadInfo = `<div class="ai-note" style="margin:0 0 8px;">Post 1 = hook yang kamu pilih. Pisahkan tiap post dengan baris <b>---</b>.` +
+      (posts.length ? ` Sekarang ada <b>${posts.length} post</b>.` : '') +
+      (tooLong.length ? ` <span style="color:#B23B2A;font-weight:700;">Post ${tooLong.map(x=>x.n).join(', ')} lebih dari ${THREADS_POST_LIMIT} karakter (batas Threads).</span>` : '') +
+      `</div>`;
+  }
 
   return `
-    <div class="field-label" style="margin-top:4px;">Hook terpilih</div>
+    <div class="field-label" style="margin-top:4px;">${thread ? 'Hook = post 1 utas' : 'Hook terpilih'}</div>
     <div class="choice-card selected" style="margin-bottom:0;">
       <div style="font-size:14.5px;line-height:1.5;">${escapeHtml(idea.hook||'')}</div>
       <div style="margin-top:8px;"><button type="button" class="link-btn" data-step="2">Ubah hook</button></div>
     </div>
 
-    <div class="field-label">Caption</div>
+    <div class="field-label">${thread ? 'Isi utas Threads' : 'Caption'}</div>
     ${capState.status==='error' ? `
       <div class="error-box">${escapeHtml(capState.error)}</div>
       ${needsSettings ? `<button type="button" class="btn-secondary" style="margin-bottom:10px;" data-open-settings="caption">${ico('key')} Cek API key &amp; model</button>` : ''}` : ''}
     <div class="card" style="padding:12px;">
-      <textarea id="editCaptionText" rows="8" placeholder="Generate pakai AI, atau tulis caption kamu sendiri di sini">${escapeHtml(idea.caption||'')}</textarea>
+      ${threadInfo}
+      <textarea id="editCaptionText" rows="${thread?12:8}" placeholder="Generate pakai AI, atau tulis ${noun} kamu sendiri di sini">${escapeHtml(idea.caption||'')}</textarea>
       <button type="button" class="btn-primary" style="margin-top:10px;" id="capGenerateBtn" ${loading?'disabled':''}>
-        ${loading ? 'AI lagi nulis caption...' : `${ico('sparkle')} ${genLabel}`}
+        ${loading ? `AI lagi nulis ${noun}...` : `${ico('sparkle')} ${genLabel}`}
       </button>
       <div class="ai-note">${capNote}</div>
     </div>
@@ -1466,7 +1545,7 @@ function renderHookModeControls(){
     const label = (aiState.status==='done' || aiState.status==='error') ? 'Generate ulang' : 'Generate hook dengan AI';
     return seg + `
     <button type="button" class="btn-primary" style="margin-top:12px;" id="aiGenerateBtn" ${loading?'disabled':''}>${ico('sparkle')} ${label}</button>
-    <div class="ai-note">${hasRef ? `${ico('target')} Hook disesuaikan dengan referensi kamu. ` : ''}${hasKey
+    <div class="ai-note">${hasRef ? `${ico('target')} Hook dibuat dengan pola referensi kamu. ` : ''}${isThread(draftIdea && draftIdea.format) ? 'Untuk utas, hook dibuat singkat sebagai post 1. ' : ''}${hasKey
       ? `${ico('key')} API key tersimpan di perangkat ini · <button type="button" class="link-btn" data-open-settings>Atur</button>`
       : `Butuh API key Gemini (gratis dari Google AI Studio). <button type="button" class="link-btn" data-open-settings>Atur sekarang</button>`}</div>`;
   }
@@ -1500,6 +1579,10 @@ function renderAiResults(){
   if(aiState.status==='done'){
     const current = (draftIdea.hook||'').trim();
     return `
+      ${aiState.insight ? `
+      <div class="error-box" style="background:var(--accent-soft);color:var(--accent-dark);margin:14px 0 0;">
+        <b>Pola referensi yang terbaca:</b> ${escapeHtml(aiState.insight)}
+      </div>` : ''}
       <div class="field-label">Pilih satu hook</div>
       ${aiState.hooks.map(h=>{
         const sel = current===h;
