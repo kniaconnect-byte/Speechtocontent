@@ -5,7 +5,7 @@
    perlu sentuh index.html sama sekali.
    ============================================================ */
 
-const FORMATS = ["Reels","TikTok","YouTube","Carousel","Story"];
+const FORMATS = ["Reels","TikTok","YouTube","Carousel","Story","Utas Threads"];
 const CAT_COLORS = ['#98453e','#c9776a','#6d2520','#d6a29a','#8a5a48','#b56357','#5c3a34','#e0a99f'];
 
 const HOOKS_60 = [
