@@ -756,16 +756,18 @@ function buildHookPrompt(ideaText, format, reference){
   if(hasRef){
     rules.push(
       '',
-      'ATURAN REFERENSI (WAJIB DIIKUTI):',
-      '- Pengguna menempelkan REFERENSI konten viral. Referensi ini acuan UTAMA dan lebih penting daripada gaya umum mana pun.',
-      '- Langkah 1, bedah referensi: tangkap rumusnya, yaitu teknik pembuka (misalnya perintah "stop", pertanyaan, angka, pengakuan, kontras, larangan), struktur kalimat, panjang, nada, dan tanda baca.',
-      '- Langkah 2, tulis hook BARU tentang IDE pengguna memakai rumus yang SAMA. Semua hook harus terasa seperti saudara kandung referensi: teknik pembuka dan struktur kalimat sama, panjang mirip, nada sama.',
-      '- Boleh ganti kata dan topik, tapi jangan ganti rumusnya. Jangan menyalin kalimat referensi mentah-mentah dan jangan membawa topik atau klaim referensi.',
-      '- Variasi antar hook cukup di pilihan kata atau detail; rumusnya tetap sama.',
-      '- Contoh cara kerja (hanya ilustrasi): referensi "Stop scroll! 3 kesalahan yang bikin jualanmu sepi." berpola [perintah stop] + [angka] + [akibat negatif]. Untuk ide "cara menabung", hasilnya: "Stop nabung begini! 3 kebiasaan yang bikin dompetmu bocor."',
+      'CARA MEMAKAI REFERENSI (WAJIB):',
+      '- Pengguna menempelkan REFERENSI konten viral. Tugasmu BUKAN mengisi ulang kalimat referensi dengan topik baru. Tugasmu menangkap alasan referensi itu berhasil, lalu menulis hook yang benar-benar baru dengan pemicu dan suara yang sama.',
+      '- Langkah 1, baca referensi: apa PEMICU yang bikin orang berhenti scroll (misalnya rasa takut ketinggalan, menegur kebiasaan sendiri, rasa penasaran, pengakuan jujur, kontras), dan bagaimana SUARA-nya (nada, ritme, panjang, pilihan kata, tanda baca).',
+      '- Langkah 2, baca ide: temukan INTI ide, yaitu satu poin, masalah, atau kejutan spesifik yang paling menarik. Jangan cuma mengambil topiknya.',
+      '- Langkah 3, tulis hook dari inti ide itu sebagai kalimat utuh yang alami, seperti diucapkan orang beneran, dengan pemicu dan suara referensi. Yang ditiru adalah pemicu dan suaranya, bukan susunan katanya.',
+      '- DILARANG menaruh topik ide ke dalam kerangka kalimat referensi (isi-ulang formulir). DILARANG memakai 3 kata berurutan atau lebih yang sama dengan referensi, kecuali kata umum.',
+      '- Jangan menempelkan teks ide mentah pengguna ke dalam hook, dan jangan menulis label atau kata "hook" di hasil. Kalau ide pengguna berupa hook kasar, poles jadi kalimat yang lebih tajam.',
+      '- Kelima hook beda sudut dan beda susunan kalimat, tapi pemicu dan suaranya sama dengan referensi.',
+      '- Contoh (ilustrasi): referensi "Stop scroll! 3 kesalahan yang bikin jualanmu sepi." Pemicunya: menegur kebiasaan sendiri dengan tegas dan bikin penasaran akan kesalahannya. Ide: "cara menabung dari gaji kecil". SALAH (formulir kosong): "Stop scroll! 3 kesalahan yang bikin tabunganmu sepi." BENAR: "Gaji kecil itu bukan alasan, ini kebiasaan yang diam-diam menguras dompetmu."',
       '',
       'Buat ' + AI_HOOK_COUNT + ' hook.',
-      'Balas HANYA berupa JSON object seperti ini, tanpa penjelasan lain: {"pola_referensi":"rumus referensi dalam 1-2 kalimat","hooks":[' + AI_HOOK_COUNT + ' string]}'
+      'Balas HANYA berupa JSON object seperti ini, tanpa penjelasan lain: {"pemicu_referensi":"pemicu dan suara referensi dalam 1 kalimat","inti_ide":"inti ide dalam 1 kalimat","hooks":[' + AI_HOOK_COUNT + ' string]}'
     );
   } else {
     rules.push(
@@ -775,12 +777,12 @@ function buildHookPrompt(ideaText, format, reference){
     );
   }
 
-  const ideaBlock = 'IDE PENGGUNA (isi hook diambil dari sini):\n"""\n' + String(ideaText).slice(0, 1500) + '\n"""\n' +
+  const ideaBlock = 'IDE PENGGUNA (cari inti idenya, hook dibuat dari sini):\n"""\n' + String(ideaText).slice(0, 1500) + '\n"""\n' +
                     (format ? 'Format konten: ' + format + '\n' : '');
   let user;
   if(hasRef){
     // Referensi ditaruh duluan supaya jadi acuan utama, contoh library sengaja nggak dipakai biar gayanya nggak campur
-    user = 'REFERENSI KONTEN VIRAL (tiru rumus dan polanya, bukan isinya):\n"""\n' + String(reference).slice(0, 1500) + '\n"""\n\n' + ideaBlock;
+    user = 'REFERENSI KONTEN VIRAL (pelajari pemicu dan suaranya, jangan tiru susunan katanya):\n"""\n' + String(reference).slice(0, 1500) + '\n"""\n\n' + ideaBlock;
   } else {
     // Tanpa referensi: contoh gaya diambil dari library sendiri (data.js) biar nada hook-nya nyambung sama brand
     const refs = HOOKS_60.map(c => '- ' + c.name + ': "' + c.items[0] + '" / "' + (c.items[1] || c.items[0]) + '"').join('\n');
@@ -823,7 +825,7 @@ function buildCaptionPrompt(idea){
   }
   if(hasRef){
     rules.push(
-      '- Pengguna memberi REFERENSI konten viral. Bedah dulu gaya penulisannya (struktur, panjang, nada, pola ajakan), lalu tulis dengan rumus yang sama tapi isinya tentang ide pengguna. Jangan menyalin kalimat dari referensi.'
+      '- Pengguna memberi REFERENSI konten viral. Tangkap suara dan ritmenya (nada, panjang kalimat, cara membuka dan menutup), lalu tulis dari ide pengguna dengan suara itu. Jangan mengisi ulang kerangka kalimat referensi dan jangan memakai 3 kata berurutan yang sama dengan referensi.'
     );
   }
   rules.push(thread
@@ -832,11 +834,32 @@ function buildCaptionPrompt(idea){
 
   let user = '';
   if(hasRef){
-    user += 'REFERENSI KONTEN VIRAL (tiru gaya dan polanya, bukan isinya):\n"""\n' + String(idea.reference).slice(0, 1500) + '\n"""\n\n';
+    user += 'REFERENSI KONTEN VIRAL (pelajari suara dan ritmenya, jangan tiru susunan katanya):\n"""\n' + String(idea.reference).slice(0, 1500) + '\n"""\n\n';
   }
   user += 'IDE PENGGUNA:\n"""\n' + String(idea.text).slice(0, 1500) + '\n"""\n' +
           '\nHook terpilih:\n"""\n' + String(idea.hook).slice(0, 500) + '\n"""\n';
   return {system: rules.join('\n'), user};
+}
+
+/* Deteksi hook yang cuma menyalin / mengisi ulang kalimat referensi (3 kata berurutan sama) */
+const COMMON_WORDS = new Set(['yang','di','ke','dan','ini','itu','kamu','aku','untuk','dengan','dari','jadi','kalau','ada','nggak','tidak','bisa','aja','banget','sih','ya','juga','udah','sudah','lagi','mau','buat','pada','atau','karena','biar','gak','ga']);
+function wordsOf(s){
+  return String(s || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(Boolean);
+}
+function trigramsOf(words){
+  const out = [];
+  for(let i = 0; i + 2 < words.length; i++){
+    const g = words.slice(i, i + 3);
+    if(g.some(w => !COMMON_WORDS.has(w))) out.push(g.join(' '));
+  }
+  return out;
+}
+function copiesReference(hook, reference){
+  const refGrams = new Set(trigramsOf(wordsOf(reference)));
+  return trigramsOf(wordsOf(hook)).some(g => refGrams.has(g));
+}
+function dropCopies(hooks, reference){
+  return hooks.filter(h => !copiesReference(h, reference));
 }
 
 function cleanHookList(arr){
@@ -844,7 +867,8 @@ function cleanHookList(arr){
   const out = [];
   (arr || []).forEach(x => {
     if(typeof x !== 'string') return;
-    const s = x.replace(/\s+/g, ' ').trim();
+    const s = x.replace(/\s+/g, ' ').trim()
+      .replace(/^hook\s*\d*\s*[:\-–]\s*/i, '').replace(/^["“”]+|["“”]+$/g, '').trim();
     if(s.length < 5 || s.length > 220) return;
     const k = s.toLowerCase();
     if(seen.has(k)) return;
@@ -912,17 +936,29 @@ function parseHookResult(text){
   try{
     const j = JSON.parse(t);
     if(j && !Array.isArray(j) && Array.isArray(j.hooks)){
-      const insight = typeof j.pola_referensi === 'string' ? j.pola_referensi.replace(/\s+/g, ' ').trim().slice(0, 300) : '';
-      return {hooks: cleanHookList(j.hooks), insight};
+      const clip = v => typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, 300) : '';
+      return {hooks: cleanHookList(j.hooks), insight: clip(j.pemicu_referensi || j.pola_referensi), core: clip(j.inti_ide)};
     }
   }catch(e){}
-  return {hooks: parseHookList(t), insight: ''};
+  return {hooks: parseHookList(t), insight: '', core: ''};
 }
 
 async function generateHooksWithGemini(ideaText, format, reference){
   const {system, user} = buildHookPrompt(ideaText, format, reference);
   const text = await callGemini(system, user, true);
-  const result = parseHookResult(text);
+  let result = parseHookResult(text);
+  if(hasReference(reference)){
+    // Hook yang cuma mengisi ulang kalimat referensi dibuang; kalau terlalu banyak yang begitu, minta AI nulis ulang sekali
+    let kept = dropCopies(result.hooks, reference);
+    if(kept.length < 3){
+      const retryText = await callGemini(system,
+        user + '\n\nCATATAN: hasil sebelumnya terlalu mirip kalimat referensi. Tulis ulang SEMUA hook dari inti ide dengan kalimat yang sepenuhnya baru; jangan pakai susunan kata referensi.', true);
+      const r2 = parseHookResult(retryText);
+      const kept2 = dropCopies(r2.hooks, reference);
+      if(kept2.length > kept.length){ result = r2; kept = kept2; }
+    }
+    if(kept.length) result = Object.assign({}, result, {hooks: kept});
+  }
   if(!result.hooks.length) throw aiError('empty', 'AI nggak ngasih hasil yang bisa dipakai. Coba generate ulang.');
   return result;
 }
@@ -968,7 +1004,7 @@ async function startAiGenerate(){
   try{
     const res = await generateHooksWithGemini(draftIdea.text, draftIdea.format, draftIdea.reference);
     if(myId !== aiReqId) return;
-    aiState = {status:'done', hooks:res.hooks, insight:res.insight, usedRef:hasReference(draftIdea.reference), error:'', code:''};
+    aiState = {status:'done', hooks:res.hooks, insight:res.insight, core:res.core, usedRef:hasReference(draftIdea.reference), error:'', code:''};
   }catch(e){
     if(myId !== aiReqId) return;
     aiState = {status:'error', hooks:[], insight:'', error:e.message || 'Gagal generate.', code:e.code || 'other'};
@@ -1579,9 +1615,10 @@ function renderAiResults(){
   if(aiState.status==='done'){
     const current = (draftIdea.hook||'').trim();
     return `
-      ${aiState.insight ? `
+      ${(aiState.insight || aiState.core) ? `
       <div class="error-box" style="background:var(--accent-soft);color:var(--accent-dark);margin:14px 0 0;">
-        <b>Pola referensi yang terbaca:</b> ${escapeHtml(aiState.insight)}
+        ${aiState.insight ? `<div><b>Yang ditangkap dari referensi:</b> ${escapeHtml(aiState.insight)}</div>` : ''}
+        ${aiState.core ? `<div style="margin-top:6px;"><b>Inti idemu:</b> ${escapeHtml(aiState.core)}</div>` : ''}
       </div>` : ''}
       <div class="field-label">Pilih satu hook</div>
       ${aiState.hooks.map(h=>{
